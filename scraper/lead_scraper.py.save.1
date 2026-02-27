@@ -1,0 +1,129 @@
+import requests
+from bs4 import BeautifulSoup
+import re
+import csv
+import time
+
+BASE_CA = "/etc/ssl/certs/ca-certificates.crt"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
+
+KEYWORDS = [
+    "student visa consultancy",
+    "immigration consultancy",
+    "study abroad agency",
+    "visa processing agency",
+    "overseas education consultancy",
+    "work permit consultancy",
+    "Canada visa agency",
+    "UK student visa consultancy",
+    "Australia student visa agency"
+]
+
+CITIES = [
+    "Bangladesh",
+    "Dhaka",
+    "Sylhet",
+    "Chittagong",
+    "Rajshahi",
+    "Khulna",
+    "Barisal",
+    "Cumilla",
+    "Rangpur"
+]
+
+MAX_LEADS = 150
+DELAY = 2
+
+
+def build_queries():
+    queries = []
+    for keyword in KEYWORDS:
+        for city in CITIES:
+            q = f'site:facebook.com "{keyword}" {city}'
+            queries.append(q)
+    return queries
+
+
+def search_duckduckgo(query, page=0):
+    url = "https://html.duckduckgo.com/html/"
+    try:
+        response = requests.post(
+            url,
+            data={
+                "q": query,
+                "s": page * 50
+            },
+            headers=HEADERS,
+            verify=BASE_CA,
+            timeout=10
+        )
+        return response.text
+    except:
+        return ""
+
+
+def extract_facebook_pages(html):
+    soup = BeautifulSoup(html, "lxml")
+    links = []
+
+    for a in soup.find_all("a", href=True):
+        link = a["href"]
+
+        if "facebook.com" not in link:
+            continue
+
+        if any(x in link for x in [
+zz    link = link.split("?")[0]
+    link = link.rstrip("/")
+    return link
+
+
+def save_to_csv(rows):
+    with open("data/facebook_leads.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["FacebookPage"])
+        for r in rows:
+            writer.writerow([r])
+
+
+def main():
+    queries = build_queries()
+    collected = set()
+
+    print("\n🚀 Facebook Lead Engine Started...\n")
+
+    for query in queries:
+        print(f"🔎 Searching: {query}")
+
+        for page in range(2):  # pagination (2 pages per query)
+            html = search_duckduckgo(query, page)
+            links = extract_facebook_pages(html)
+
+            for link in links:
+                clean = normalize_link(link)
+
+                if clean not in collected:
+                    collected.add(clean)
+                    print(f"✅ {clean}")
+
+                if len(collected) >= MAX_LEADS:
+                    break
+
+            time.sleep(DELAY)
+
+            if len(collected) >= MAX_LEADS:
+                break
+
+        if len(collected) >= MAX_LEADS:
+            break
+
+    save_to_csv(collected)
+
+    print(f"\n✅ Saved {len(collected)} Facebook leads safely.")
+
+
+if __name__ == "__main__":
+    main()

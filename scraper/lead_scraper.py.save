@@ -1,0 +1,245 @@
+from bs4 import BeautifulSoup
+import re
+import csv
+import time
+import os
+from urllib.parse import urlparse, urljoin
+
+BASE_CA = "/etc/ssl/certs/ca-certificates.crt"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"
+}
+
+SEARCH_QUERIES = [
+    "student visa consultancy in Bangladesh",
+    "immigration agency Bangladesh",
+    "overseas job consultancy Bangladesh",
+    "study abroad consultancy Bangladesh",
+    "Canada visa agency Bangladesh",
+    "UK student visa consultancy Bangladesh"
+]
+
+MAX_LEADS = 100
+DELAY = 2
+
+
+# -----------------------------
+# Utility Functions
+# -----------------------------
+
+def clean_domain(url):
+    parsed = urlparse(url)
+    return parsed.scheme + "://" + parsed.netloc
+
+
+def is_valid_domain(domain):
+    blacklist = [
+        "blog", "news", "wikipedia", "facebook.com/sharer",
+        "linkedin.com/share", "twitter.com/share"
+    ]
+    return not any(word in domain.lower() for word in blacklist)
+
+
+def is_valid_email(email):
+    bad_keywords = [
+        "jquery", "bootstrap", "example", ".png", ".jpg",
+        ".jpeg", ".gif", ".svg", ".js", ".css"
+    ]
+    email = email.lower()
+    if any(bad in email for bad in bad_keywords):
+        return False
+    if email.endswith((".png", ".jpg", ".js", ".css")):
+        return False
+    return True
+
+
+# -----------------------------
+# Search Function
+# -----------------------------
+
+def search_duckduckgo(query):
+    print(f"\n🔎 Searching: {query}")
+    url = "https://html.duckduckgo.com/html/"
+
+    try:
+        response = requests.post(
+            url,
+            data={"q": query},
+            headers=HEADERS,
+            verify=BASE_CA,
+            timeout=10
+        )
+    except:
+        return []
+
+    soup = BeautifulSoup(response.text, "lxml")
+    links = []
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "http" in href and "duckduckgo" not in href:
+            links.append(href)
+
+    return list(set(links))
+
+
+# -----------------------------
+# Contact Extraction
+# -----------------------------
+
+def extract_contacts(url):
+    emails = set()
+    phones = set()
+    whatsapp = set()
+    facebook = set()
+    instagram = set()
+    linkedin = set()
+    youtube = set()
+
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=7, verify=BASE_CA)
+        text = response.text
+
+        # ----- EMAILS -----
+        raw_emails = re.findall(
+            r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text
+        )
+        for e in raw_emails:
+            if is_valid_email(e):
+                emails.add(e)
+
+        # ----- PHONES (Bangladesh) -----
+        phones.update(
+            re.findall(r'(\+8801[3-9]\d{8}|8801[3-9]\d{8}|01[3-9]\d{8})', text)
+        )
+
+        # ----- WHATSAPP -----
+        whatsapp.update(re.findall(r'https://wa\.me/\d+', text))
+
+        # ----- SOCIAL MEDIA -----
+        facebook.update(re.findall(r'https?://(?:www\.)?facebook\.com/[^\s"\']+', text))
+        instagram.update(re.findall(r'https?://(?:www\.)?instagram\.com/[^\s"\']+', text))
+        linkedin.update(re.findall(r'https?://(?:www\.)?linkedin\.com/[^\s"\']+', text))
+        youtube.update(re.findall(r'https?://(?:www\.)?youtube\.com/[^\s"\']+', text))
+
+        # ----- CHECK CONTACT PAGE -----
+        soup = BeautifulSoup(text, "lxml")
+        for link in soup.find_all("a", href=True):
+            if "contact" in link["href"].lower():
+                contact_url = urljoin(url, link["href"])
+                try:
+                    contact_res = requests.get(contact_url, headers=HEADERS, timeout=5, verify=BASE_CA)
+                    contact_text = contact_res.text
+
+                    raw_emails = re.findall(
+                        r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+                        contact_text
+                    )
+                    for e in raw_emails:
+                        if is_valid_email(e):
+                            emails.add(e)
+
+                    phones.update(
+                        re.findall(r'(\+8801[3-9]\d{8}|8801[3-9]\d{8}|01[3-9]\d{8})', contact_text)
+                    )
+
+                except:
+                    pass
+
+        return (
+            list(emails),
+            list(phones),
+            list(whatsapp),
+            list(facebook),
+            list(instagram),
+            list(linkedin),
+            list(youtube)
+        )
+
+    except:
+        return [], [], [], [], [], [], []
+
+
+# -----------------------------
+# Save Function
+# -----------------------------
+
+def save_to_csv(data):
+    file_exists = os.path.isfile("data/leads.csv")
+
+    with open("data/leads.csv", "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+
+        if not file_exists:
+            writer.writerow([
+                "Website",
+                "Email",
+                "Phone",
+                "WhatsApp",
+                "Facebook",
+                "Instagram",
+                "LinkedIn",
+                "YouTube"
+            ])
+
+        writer.writerows(data)
+
+
+# -----------------------------
+# MAIN
+# -----------------------------
+
+def main():
+    collected_domains = set()
+    results = []
+
+    for query in SEARCH_QUERIES:
+        links = search_duckduckgo(query)
+
+        for link in links:
+            domain = clean_domain(link)
+
+            if not is_valid_domain(domain):
+                continue
+
+            if domain in collected_domains:
+                continue
+
+            collected_domains.add(domain)
+
+            print(f"🌐 Checking: {domain}")
+
+            emails, phones, wa, fb, ig, li, yt = extract_contacts(domain)
+
+            email = emails[0] if emails else ""
+            phone = phones[0] if phones else ""
+            whatsapp = wa[0] if wa else ""
+            facebook = fb[0] if fb else ""
+            instagram = ig[0] if ig else ""
+            linkedin = li[0] if li else ""
+            youtube = yt[0] if yt else ""
+
+            if email or phone or facebook:
+                print(f"✅ Valid Lead -> {domain}")
+                results.append([
+                    domain,
+                    email,
+                    phone,
+                    whatsapp,
+                    facebook,
+                    instagram,
+                    linkedin,
+                    youtube
+                ])
+
+            time.sleep(DELAY)
+
+            if len(results) >= MAX_LEADS:
+                break
+
+        if len(results) >= MAX_LEADS:
+            break
+
+    save_to_csv(results)
+    print(f"\n🚀

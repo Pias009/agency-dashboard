@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: agency-machine-web
+    env: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -b 0.0.0.0:$PORT dashboard:app

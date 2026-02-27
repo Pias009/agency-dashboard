@@ -1,0 +1,254 @@
+import requests
+from bs4 import BeautifulSoup
+import re
+import csv
+import time
+from urllib.parse import urlparse
+
+BASE_CA = "/etc/ssl/certs/ca-certificates.crt"
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+DELAY = 2
+MAX_LEADS = 150
+
+KEYWORDS = [
+    "student visa consultancy",
+    "immigration consultancy",
+    "study abroad agency",
+    "visa processing agency",
+    "Canada visa consultancy",
+    "UK student visa consultancy"
+]
+
+CITIES = [
+    "Bangladesh",
+    "Dhaka",
+    "Sylhet",
+    "Chittagong",
+    "Rajshahi"
+]
+
+
+# ==============================
+# SEARCH ENGINE
+# ==============================
+
+def search_duckduckgo(query, page=0):
+    url = "https://html.duckduckgo.com/html/"
+    try:
+        response = requests.post(
+            url,
+            data={"q": query, "s": page * 50},
+            headers=HEADERS,
+            verify=BASE_CA,
+            timeout=10
+        )
+        return response.text
+    except:
+        return ""
+
+
+# ==============================
+# WEBSITE EXTRACTION
+# ==============================
+
+def clean_domain(url):
+    parsed = urlparse(url)
+    return parsed.scheme + "://" + parsed.netloc
+
+
+def extract_website_contacts(url):
+    phone = ""
+    email = ""
+    facebook = ""
+
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=8, verify=BASE_CA)
+        html = res.text
+
+        phones = re.findall(r'(\+8801[3-9]\d{8}|01[3-9]\d{8})', html)
+        if phones:
+            phone = phones[0]
+
+        emails = re.findall(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", html)
+        if emails:
+            email = emails[0]
+
+        fb_links = re.findall(r'https?://(?:www\.)?facebook\.com/[^\s"\']+', html)
+        if fb_links:
+            facebook = fb_links[0].split("?")[0]
+
+    except:
+        pass
+
+    return phone, email, facebook
+
+
+# ==============================
+# FACEBOOK FILTER
+# ==============================
+
+def extract_clean_facebook_links(html):
+    soup = BeautifulSoup(html, "lxml")
+    links = []
+
+    for a in soup.find_all("a", href=True):
+        link = a["href"]
+
+        if "facebook.com" not in link:
+            continue
+
+        if any(x in link for x in [
+            "/reel/", "/posts/", "/videos/",
+            "/photo", "/groups/", "/share/",
+            "/permalink/", "/story.php", "/watch/"
+        ]):
+            continue
+
+        link = link.split("?")[0].rstrip("/")
+
+        parts = link.split("/")
+        if len(parts) == 4:
+            links.append(link)
+
+    return list(set(links))
+
+
+# ==============================
+# FACEBOOK PHONE ENRICHMENT
+# ==============================
+
+def extract_phone_from_html(html):
+    phones = re.findall(r'(\+8801[3-9]\d{8}|01[3-9]\d{8})', html)
+    return phones[0] if phones else ""
+
+
+def enrich_facebook_phone(page_name):
+    query = f'"{page_name}" Bangladesh phone'
+    html = search_duckduckgo(query)
+    return extract_phone_from_html(html)
+
+
+def extract_facebook_page_name(url):
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=8, verify=BASE_CA)
+        soup = BeautifulSoup(res.text, "lxml")
+        if soup.title:
+            return soup.title.text.replace("| Facebook", "").strip()
+    except:
+        pass
+    return ""
+
+
+# ==============================
+# MAIN ENGINE
+# ==============================
+
+def main():
+    collected = {}
+    total_count = 0
+
+    print("\n🚀 MASTER LEAD ENGINE STARTED\n")
+
+    # WEBSITE LEADS
+    for keyword in KEYWORDS:
+        for city in CITIES:
+            query = f"{keyword} {city} website"
+            print(f"🔎 Website Search: {query}")
+
+            html = search_duckduckgo(query)
+            soup = BeautifulSoup(html, "lxml")
+
+            for a in soup.find_all("a", href=True):
+                link = a["href"]
+
+                if "http" not in link or "duckduckgo" in link:
+                    continue
+
+                domain = clean_domain(link)
+
+                if domain in collected:
+                    continue
+
+                phone, email, fb = extract_website_contacts(domain)
+
+                if phone or email:
+                    collected[domain] = {
+                        "Source": "Website",
+                        "Website": domain,
+                        "Facebook": fb,
+                        "Phone": phone,
+                        "Email": email
+                    }
+
+                    print(f"✅ Website Lead: {domain} | {phone}")
+
+                total_count += 1
+                if total_count >= MAX_LEADS:
+                    break
+
+                time.sleep(DELAY)
+
+            if total_count >= MAX_LEADS:
+                break
+
+        if total_count >= MAX_LEADS:
+            break
+
+    # FACEBOOK LEADS
+    for keyword in KEYWORDS:
+        for city in CITIES:
+            query = f'site:facebook.com "{keyword}" {city}'
+            print(f"🔎 Facebook Search: {query}")
+
+            html = search_duckduckgo(query)
+            fb_links = extract_clean_facebook_links(html)
+
+            for fb in fb_links:
+                if fb in collected:
+                    continue
+
+                page_name = extract_facebook_page_name(fb)
+                phone = enrich_facebook_phone(page_name) if page_name else ""
+
+                collected[fb] = {
+                    "Source": "Facebook",
+                    "Website": "",
+                    "Facebook": fb,
+                    "Phone": phone,
+                    "Email": ""
+                }
+
+                print(f"✅ Facebook Lead: {fb} | {phone}")
+
+                total_count += 1
+                if total_count >= MAX_LEADS:
+                    break
+
+                time.sleep(DELAY)
+
+            if total_count >= MAX_LEADS:
+                break
+
+        if total_count >= MAX_LEADS:
+            break
+
+    # SAVE MASTER FILE
+    with open("data/master_leads.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Source", "Website", "Facebook", "Phone", "Email"])
+
+        for data in collected.values():
+            writer.writerow([
+                data["Source"],
+                data["Website"],
+                data["Facebook"],
+                data["Phone"],
+                data["Email"]
+            ])
+
+    print(f"\n✅ MASTER LEADS SAVED: {len(collected)}")
+
+
+if __name__ == "__main__":
+    main()
