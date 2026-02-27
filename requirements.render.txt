@@ -1,0 +1,7 @@
+Flask==2.3.3
+gunicorn==20.1.0
+requests==2.31.0
+Pillow==10.2.0
+
+# Minimal runtime requirements for Render. Keep full `requirements.txt` for local
+# development if you need system packages; Render will install this minimal set.
